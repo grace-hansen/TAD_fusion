@@ -1,0 +1,58 @@
+{
+    "__default__" :
+    {
+        "mem" : 4000,
+        "partition" : "broadwl",
+        "n" : 1,
+        "tasks" : 1,
+        "name" : "merged_{rule}-{wildcards.sample}",
+        "logfile" : "log/merged_{rule}-{wildcards.sample}.out",
+        "time" : "04:00:00"
+    },
+    "make_hicsummary" :
+    {
+        "mem" : 8000
+    },
+    "make_tagdir" :
+    {
+        "mem" : 56000
+    },
+    "merge_tagdirs" :
+    {
+        "partition" : "bigmem2",
+        "mem" : "128G",
+        "name" : "merged_{rule}",
+        "logfile" : "log/merged_{rule}.out",
+        "time" : "24:00:00"
+    },
+    "calc_DI" :
+    {
+        "partition" : "bigmem2",
+        "mem" : "128G",
+        "name" : "merged_{rule}-{wildcards.chr}",
+        "logfile" : "log/merged_{rule}-{wildcards.chr}.out",
+        "time" : "36:00:00"
+    },
+    "merge_DI" :
+    {
+        "name" : "merged_{rule}",
+        "logfile" : "log/merged_{rule}.out"
+    },
+    "view_HiC" :
+    {
+        "name" : "merged_{rule}",
+        "logfile" : "log/merged_{rule}.out"   
+    },
+    "digest_genome" :
+    {
+        "mem" : 16000,
+        "name" : "merged_{rule}",
+        "logfile" : "log/merged_{rule}.out"
+    },
+    "grab_top_fragments" :
+    {
+        "mem" : 16000,
+        "name" : "merged_{rule}",
+        "logfile" : "log/merged_{rule}.out"
+    },
+}

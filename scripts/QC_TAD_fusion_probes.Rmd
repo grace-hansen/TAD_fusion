@@ -1,0 +1,273 @@
+---
+title: "Quality check of probe selection for TAD fusion events"
+author: "Grace Hansen"
+date: "10/05/2020"
+output: pdf_document
+---
+  
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+knitr::opts_knit$set(root.dir = '~/midway/TAD_fusion/')
+library(data.table)
+library(tidyverse)
+library(scales)
+library(gridExtra)
+
+########## For color manipulation of graph ###############
+darken <- function(color, factor=1.2){
+  col <- col2rgb(color)
+  col <- col/factor
+  col <- rgb(t(col), maxColorValue=255)
+  col
+}
+lighten <- function(color, factor=0.8){
+  col <- col2rgb(color)
+  col <- col/factor
+  for (i in 1:length(col)) { if ( col[i] > 255 ) { col[i] = 255 } }
+  col <- rgb(t(col), maxColorValue=255)
+  col
+}
+#########################################################
+```
+
+# Summary of pipeline
+
+Details of the pipeline can be found in the Snakefile and associated files.
+For the Rao et al. GM12878 in-situ datasets, I:
+
+1. Converted the data available on GEO (*nodups.txt.gz) to hicsummary format
+2. Made a HOMER tag dir from the *hicsummary file
+3. Combined all tag dirs into one tag dir
+4. Identified TADs and calculated DI on each chromosome using HOMER
+5. Merged the data from all chromosomes
+6. Selected TADs > 100kb that overlapped no other TADs
+7. Selected the top 2000 TADs by inclusion score
+8. For these TADs, selected the 25 MboI fragments with the highest DI score and the top 25 fragments with the lowest DI score
+  + (25+25)*2000 = ~100,000 probes representing the extreme ends of each TAD, which in normal conditions should be shielded from extra-TAD contacts
+  
+## HiC statistics:
+
+* **27 libraries**
+* **5.009E9 total reads**
+* **1kb resolution**
+  
+# TAD calling
+
+Did my TAD calling work?
+
+### TAD calling: descriptive statistics
+
+``` {r TAD_general_stats,echo=FALSE}
+tads<-fread("~/midway/TAD_fusion/results/merged_HIC.tad.2D.bed")
+nTADs<-paste("Number of TADs: ",nrow(tads),sep='')
+mean_dist=paste("Mean length: ",round(mean(tads$V3-tads$V2)/1000,digits=2)," kb",sep='')
+median_dist=paste("Median length: ",round(median(tads$V3-tads$V2)/1000,digits=2)," kb",sep='')
+min_dist=paste("Max length: ",round(min(tads$V3-tads$V2)/1000,digits=2)," kb",sep='')
+max_dist=paste("Min length: ",round(max(tads$V3-tads$V2)/1000,digits=2)," kb",sep='')
+
+ggplot()+
+  geom_histogram(aes(x=(tads$V3-tads$V2)/1000),bins=50,fill="steelblue4")+
+  scale_x_continuous(name="TAD distance (kb)")+
+  theme_minimal()+
+  annotate(x=1000,y=300,"text",label=paste(nTADs,"TAD statistics:",mean_dist,median_dist,max_dist,min_dist,sep='\n'))+
+  ggtitle("TAD length")
+```
+
+### TAD calling: internal consistency
+
+Do the TADs called make sense relative to loops and directionality index (DI) also identified by HOMER? Below is a visualization of the loop ends, TADs, and DI on the WashU browser:
+
+![](DI_loops_TADs.jpg)
+
+### TAD calling: similarity to Rao et al. TAD calling
+
+Rao et al used Arrowhead, not HOMER to call TADs. They also allowed overlapping TADs, which I didn't. Here's how my TAD calling compares to theirs:
+
+![](Rao_vs_HOMER_TADs.jpg)
+
+# TAD selection
+
+### TAD selection: TAD score
+First, TADs that overlap other TADs are removed (this is only 200 or so of the 3706 TADs), and then all TADs < 100kb are removed. After this, the top 2000 TADs by inclusion ratio (a measure of how insulated the TAD is, which is how HOMER scores TAD strength) are kept. These are the TADs from which fragments with a high directionality index (DI) are selected. Let's see how the scores of selected TADs compare to all TADs:
+
+``` {r TAD_hist,echo=FALSE}
+filtered_tads<-fread("results/tads_filtered_2000.bed")
+tads$type<-"Removed"
+tads$type[tads$V2 %in% filtered_tads$V2 & tads$V3 %in% tads$V3]<-"Kept"
+ggplot()+
+  geom_histogram(aes(x=tads$V9,fill=tads$type),bins=50)+
+  scale_x_continuous(name="Inclusion Ratio",limits=c(1.25,3))+
+  scale_fill_manual(values=c("steelblue3","darkseagreen3"))+
+  theme_minimal()+
+  theme(legend.title=element_blank())+
+  ggtitle("Selected and Removed TADs by score")
+```
+
+### TAD selection: TADs by chromosome
+
+Did I get a decent number of TADs per chromosome? Does the TAD calling generally reflect chromosome size?
+
+``` {r TADs_chr,echo=FALSE}
+filtered_tads$chr<-factor(filtered_tads$V1,levels=c(1:22,"X","Y"))
+ggplot()+
+  geom_bar(aes(x=filtered_tads$chr),fill="steelblue4")+
+  scale_x_discrete(name="Chromosome")+
+  theme_minimal()+
+  ggtitle("Chromosome of selected TADs")
+```
+
+### TAD selection: Directionality index within selected TADs
+
+Does directionality index follow the expected pattern within selected TADs?
+
+``` {r DI_TADs,echo=FALSE}
+#Grab top 25 pos and top 25 neg DI fragments within each of the top N TADs
+all_frags<-fread("results/MboI_frags_TADs_2000_avgDI.txt")
+colnames(all_frags)<-c("chr","start","stop","DI")
+
+tads_frags<-matrix(ncol=7)
+for (i in 1:nrow(filtered_tads)) {
+  tad_frags<-all_frags[all_frags$chr==paste("chr",filtered_tads$V1[i],sep='') & all_frags$start>filtered_tads$V2[i] & all_frags$stop<filtered_tads$V3[i]] #Grab fragments within TAD
+  tad_frags$scaled_DI<-scale(tad_frags$DI,center = TRUE) #Center and scale DI values within each TAD to aid visualization
+  tad_frags$pos_TAD<-as.numeric(rownames(tad_frags))/nrow(tad_frags)
+  tad_frags$tad<-i
+  tads_frags<-rbind(tads_frags,tad_frags,use.names=FALSE)
+}
+tads_frags<-tads_frags[2:nrow(tads_frags),]
+colnames(tads_frags)<-c("chr","start","stop","DI","scaled_DI","pos_TAD","TAD_index")
+
+# Remap DI values to positions defined as proportion of TAD
+tads_DI_scaled<-matrix(ncol=3)
+fracs<-seq(0.02,1,0.02)
+for (i in unique(tads_frags$TAD_index)) {
+  tad_frags=tads_frags[tads_frags$TAD_index==i,]
+  vals<-approx(x=tad_frags$pos_TAD,y=tad_frags$scaled_DI,xout=fracs)
+  tad_fracs<-cbind(rep(i,length(fracs)),vals$x,vals$y)
+  tads_DI_scaled<-rbind(tads_DI_scaled,tad_fracs)
+}
+tads_DI_scaled<-tads_DI_scaled[2:nrow(tads_DI_scaled),]
+colnames(tads_DI_scaled)<-c("TAD_index","TAD_pos","DI")
+tads_DI_scaled<-as.data.frame(tads_DI_scaled,stringsAsFactors = FALSE)
+
+#Plot Heatmap
+tads_DI_scaled<-tads_DI_scaled[!(is.na(tads_DI_scaled$DI)),]
+tads_DI_scaled$TAD_index<-as.character(tads_DI_scaled$TAD_index)
+tads_DI_scaled$DI[tads_DI_scaled$DI>=2]<-2
+tads_DI_scaled$DI[tads_DI_scaled$DI<=-4]<--4
+ggplot(tads_DI_scaled)+
+  geom_tile(aes(x=TAD_pos,y=TAD_index,fill=DI,color=DI),size=0.01)+
+  scale_fill_gradient2(low="blue",high="red",mid="white",midpoint = 0,na.value="white",
+   name="Directionality Index\n(normalized)")+
+  scale_color_gradient2(low="blue",high="red",mid="white",midpoint = 0,na.value="white",
+   name="")+
+  theme_minimal()+
+  guides(color=FALSE)+
+  ggtitle("Directionality of selected TADs")+
+  scale_x_continuous(name="TAD position")+
+  scale_y_discrete(name="TAD")+
+  theme(axis.text.y=element_blank())
+
+```
+
+# Probe selection
+
+When I digested the genome, I kept only fragments with a size from 150 to 800bp.
+
+To select probes, I took the 25 fragments with the lowest DI per TAD (which should represent one end of the TAD) and the 25 probes with the highest DI per TAD (which should represent the other end of the TAD). If the top 25 negative probes included positive probes, I threw out the positive probes, and vice versa.
+
+### Probe selection: DI of probes.
+
+Let's see how the DI of selected probes compares to the DI of all probes overlapping selected TADs:
+
+```{r probe_DI, echo=FALSE}
+probes<-fread("results/top_frags_TADs_2000.bed")
+colnames(probes)<-c("chr","start","stop","DI","index")
+
+all_frags$type<-"Background"
+all_frags$type[all_frags$start %in% probes$start & all_frags$stop %in% probes$stop]<-"Probe"
+
+ggplot()+
+  geom_histogram(aes(x=all_frags$DI,fill=all_frags$type),bins=50)+
+  scale_x_continuous(name="Directionality Index",limits=c(-7,7))+
+  scale_fill_manual(values=c("steelblue3","darkseagreen3"))+
+  theme_minimal()+
+  theme(legend.title=element_blank())+
+  ggtitle("Directionality Index of Selected Probes")
+```
+
+### Probe selection: probe per TAD
+
+For each TAD, I selected the top 25 probes with high DI, and the top 25 probes with low DI. I then removed probes from the high-DI group where the mean DI was negative, and vice versa. Therefore, most TADs should have 50 probes, but some TADs will have fewer. 
+
+Total number of probes: **98,693**
+
+Let's see how many probes there are per TAD:
+
+```{r probe_hist, echo=FALSE}
+probecount=as.data.frame(table(probes$index))
+probecount=as.data.frame(table(probecount$Freq))
+colnames(probecount)<-c("Number of TADs","Number of Probes/TAD")
+```
+
+Number of TADs with x probes:
+`r knitr::kable(probecount)`
+
+One option could be that I remove all TADs with < 50 probes.
+
+### Probe selection: probe location
+
+Where do the selected probes fall within the TADs?
+
+```{r probe_locs,echo=FALSE}
+#TADs_probes<-matrix(ncol=6)
+#for (i in 1:nrow(filtered_tads)) {
+  #Write out TAD quantiles
+#  chrs=paste("chr",rep(filtered_tads$V1[i],100),sep='')
+#  seqs<-seq(filtered_tads$V2[i],filtered_tads$V3[i],length.out=201)
+#  starts<-floor(seqs[1:200])
+#  stops<-floor(seqs[2:201])-1
+#  quants<-as.data.frame(cbind(chrs,starts,stops),stringsAsFactors = FALSE)
+#  write.table(quants,"temp_TAD.bed",quote=FALSE,sep='\t',row.names=FALSE,col.names=FALSE)  
+  
+  #Write out probes belonging to TAD
+#  write.table(probes[probes$chr==paste("chr",filtered_tads$V1[i],sep='') & probes$stop>=filtered_tads$V2[i] & #probes$start<=filtered_tads$V3[i],],"probes_TAD.bed",quote=FALSE,sep='\t',row.names=FALSE,col.names=FALSE)  
+#  overlaps<-system("bedtools intersect -wa -a temp_TAD.bed -b probes_TAD.bed",intern=TRUE)
+#  overlaps<-data.frame(do.call('rbind',strsplit(as.data.frame(overlaps,stringsAsFactors=FALSE)$overlaps,'\t',fixed=TRUE)))
+#  if (nrow(overlaps)>0) {
+    #Find TAD quantiles with probes
+#    colnames(overlaps)<-c("chr","starts","stops")
+#    system("rm temp_TAD.bed probes_TAD.bed")
+  
+    # Label the quadrants by whether they have a probe
+#    quants$type<-"No probe"
+#    quants$type[quants$starts %in% overlaps$starts & quants$stops %in% overlaps$stops]<-"Probe"
+#    quants$index<-paste(filtered_tads$V1[i],filtered_tads$V2[i],filtered_tads$V3[i],sep='-')
+#    quants$quant<-1:nrow(quants)
+#    TADs_probes<-rbind(TADs_probes,as.matrix(quants))
+#  }
+#}
+#TADs_probes<-as.data.frame(TADs_probes,stringsAsFactors = FALSE)
+#TADs_probes<-TADs_probes[2:nrow(TADs_probes),]
+#colnames(TADs_probes)<-c("chr","start","stop","probe","index","quant")
+#write.table(TADs_probes,"TADs_probes_quantile.txt",sep='\t',quote=FALSE,row.names=FALSE,col.names=FALSE)
+TADs_probes<-as.data.frame(fread("TADs_probes_quantile.txt"),stringsAsFactors=FALSE)
+colnames(TADs_probes)<-c("chr","start","stop","probe","index","quant")
+
+TADs_probes$probe_bin[TADs_probes$probe=="No probe"]<-0
+TADs_probes$probe_bin[TADs_probes$probe=="Probe"]<-1
+TADs_probes$quant<-as.numeric(TADs_probes$quant)
+
+ggplot(TADs_probes)+
+  geom_tile(aes(y=index,x=quant,fill=probe_bin,color=probe_bin),size=0.01)+
+  scale_fill_gradient(low="white",high="black",na.value="white",name="Probe")+
+  scale_color_gradient(low="white",high="black",na.value="white",name="")+
+  guides(color=FALSE)+
+  theme_minimal()+
+  ggtitle("Probe locations within selected TADs")+
+  scale_x_continuous(name="TAD position")+
+  scale_y_discrete(name="TAD")+
+  theme(axis.text.y=element_blank(),
+        legend.position="none")
+
+
+```

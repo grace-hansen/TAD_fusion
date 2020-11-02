@@ -1,0 +1,123 @@
+######### Author: Grace Hansen #########
+
+# Snakefile for the snakemake pipelin to run TWAS
+#
+#To configure the paths to data files and other settings, edit
+#config.yaml
+#
+#to configure job submission settings for cluster, edit
+#cluster.json and submit.snakemake.sh
+
+#to run on RCC midway2 use 'scripts/snake/submit_snakemake.sh'
+import glob
+import os
+from snakemake.utils import R
+
+#Configuration -------------------------------------
+
+configfile: "/project2/nobrega/grace/TAD_fusion/scripts/snake/config.yaml"
+
+#Paths for data (end with forward slash)
+dir_proj= config["dir"]
+scripts=config["scripts"]
+
+#Paths for files:
+raw=dir_proj + "/raw/"
+out=dir_proj + "/results/"
+logs=dir_proj + "/log/"
+tmp="/scratch/midway2/gthansen/"
+
+#Samples
+samples = [line.strip() for line in open(dir_proj+'/'+config["samples"],'r')]
+chrs=config["chrs"]
+
+#Parameters
+RE=config["RE"]
+threshold = config["threshold"]
+n_TADs = str(config['n_TADs'])
+res = config['res']
+window = config['window']
+merge_win = float(window)*2
+fasta=config["fasta"]
+
+assert os.path.exists(dir_proj), "Project directory exists"
+
+#Directory to send log files. Needs to be created manually since it
+#is not a file created by a Snakemake rule.
+if not os.path.isdir(logs):
+    os.mkdir(logs)
+if not os.path.isdir(tmp):
+    os.makedirs(tmp)
+    
+
+os.chdir(dir_proj)
+
+#Rules -------------------------------------
+
+rule all: #Here we tell snakemake everything that we want to be made
+    input:
+        expand(tmp+"{sample}_merged_nodups.hicsummary.gz",sample=samples),
+        out+"merged_HIC.DI.bw",
+        expand(out+"top_frags_selected_tads.bed",n_TADs=n_TADs)
+
+############ TWAS ###################
+
+rule make_hicsummary:
+    input:
+        raw+"{sample}_merged_nodups.txt.gz"
+    output:
+        tmp+"{sample}_merged_nodups.hicsummary.gz"
+    shell: "python {scripts}rao_to_hic_summary.py {input} {tmp}"
+
+rule make_tagdir:
+    input:
+        tmp+"{sample}_merged_nodups.hicsummary.gz"
+    output:
+        out=tmp+"{sample}/"
+    shell: "/home/gthansen/bin/homer/bin/makeTagDirectory {tmp}{wildcards.sample} -format HiCsummary {input}"
+
+rule merge_tagdirs:
+    input: 
+        expand(tmp+"{sample}/",sample=samples)
+    output:
+        out=tmp+"merged_HIC/tagInfo.txt"
+    shell: "/home/gthansen/bin/homer/bin/makeTagDirectory {tmp}merged_HIC/ -d {input}"
+
+rule calc_DI:
+    input:
+        out=tmp+"merged_HIC/tagInfo.txt"
+    output:
+        TADs=out+"merged_HIC_{chr}.tad.2D.bed",
+        DI=out+"merged_HIC_{chr}.DI.bedGraph"
+    shell: "source ~/.bashrc && /home/gthansen/bin/homer/bin/findTADsAndLoops.pl find {tmp}merged_HIC -chr {wildcards.chr} -res {res} -window {window} -genome hg19 -o {out}merged_HIC_{wildcards.chr}"
+
+rule merge_DI:
+    input:
+        expand(out+"merged_HIC_{chr}.tad.2D.bed",chr=chrs)
+    output:
+        out+"merged_HIC.tad.2D.bed"
+    shell:
+        "{scripts}merge_TADs_chr.sh merged_HIC {out}"
+
+rule view_HiC:
+    input:
+        out+"merged_HIC.tad.2D.bed"
+    output:
+        out+"merged_HIC.DI.bw"
+    shell: "{scripts}view_HiC.sh merged_HIC {out}"
+
+rule digest_genome:
+    output:
+        out+RE+"_digest/"+RE+"_frags_sizefilt.bed"
+    shell:
+        "{scripts}run_genome_digest.sh {RE} {fasta} {out} {log}"
+
+rule grab_top_fragments:
+    input: 
+        TADs=out+"merged_HIC.tad.2D.bed",
+        DI=out+"merged_HIC.DI.bw",
+        frags=out+RE+"_digest/"+RE+"_frags_sizefilt.bed"
+    output: 
+        out+"top_frags_selected_tads.bed"
+    shell:
+        "Rscript {scripts}grab_top_frags.R {input.TADs} {input.DI} {RE} {n_TADs} {out}"
