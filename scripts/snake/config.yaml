@@ -22,10 +22,11 @@ samples: samples.txt
 
 chrs: ["1","2","3","4","5","6","7","8","9","10","11","12","13","14","15","16","17","18","19","20","21","22","X","Y"]
 
-
 #Parameters
 RE: MboI #Restriction enzyme
 threshold: 0.25 #Score threshold for TADs
-n_TADs: 2000
+frags_per_TAD: 15
 res: 1000 #Resolution for HiC
 window: 15000 #Window size to use when finding TADs
+probe_length: 120 #Length of internal sequence of probes
+STAR_params: /project2/nobrega/grace/TAD_fusion/STAR_params

@@ -34,11 +34,13 @@ chrs=config["chrs"]
 #Parameters
 RE=config["RE"]
 threshold = config["threshold"]
-n_TADs = str(config['n_TADs'])
+frags_per_TAD = config['frags_per_TAD']
 res = config['res']
 window = config['window']
 merge_win = float(window)*2
 fasta=config["fasta"]
+probe_length=config["probe_length"]
+STAR_params=config["STAR_params"]
 
 assert os.path.exists(dir_proj), "Project directory exists"
 
@@ -58,7 +60,7 @@ rule all: #Here we tell snakemake everything that we want to be made
     input:
         expand(tmp+"{sample}_merged_nodups.hicsummary.gz",sample=samples),
         out+"merged_HIC.DI.bw",
-        expand(out+"top_frags_selected_tads.bed",n_TADs=n_TADs)
+        expand(out+"selected_probes.txt")
 
 ############ TWAS ###################
 
@@ -118,6 +120,14 @@ rule grab_top_fragments:
         DI=out+"merged_HIC.DI.bw",
         frags=out+RE+"_digest/"+RE+"_frags_sizefilt.bed"
     output: 
-        out+"top_frags_selected_tads.bed"
+        out+"top_frags_filtered_tads.bed"
     shell:
-        "Rscript {scripts}grab_top_frags.R {input.TADs} {input.DI} {RE} {n_TADs} {out}"
+        "Rscript {scripts}grab_top_frags.R {input.TADs} {input.DI} {RE} {frags_per_TAD} {out}"
+
+rule get_probes:
+    input: 
+        out+"top_frags_filtered_tads.bed"
+    output: 
+        out+"selected_probes.txt"
+    shell:
+        "Rscript {scripts}get_probes_from_frags.R {input} {probe_length} {fasta} {out}"

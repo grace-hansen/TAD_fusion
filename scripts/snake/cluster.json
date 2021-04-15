@@ -55,4 +55,10 @@
         "name" : "merged_{rule}",
         "logfile" : "log/merged_{rule}.out"
     },
+    "get_probes" :
+    {
+        "mem" : 40000,
+        "name" : "merged_{rule}",
+        "logfile" : "log/merged_{rule}.out"
+    },
 }
